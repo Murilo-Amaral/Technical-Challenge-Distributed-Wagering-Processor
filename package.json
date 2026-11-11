@@ -1,0 +1,39 @@
+{
+  "name": "distributed-wagering-processor",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@aws-sdk/client-sqs": "^3.1167.0",
+    "@nestjs/common": "^11",
+    "@nestjs/core": "^11",
+    "@nestjs/platform-express": "^11",
+    "jose": "^6.2.17",
+    "pg": "^8.23.1",
+    "pino": "^10.4.0",
+    "prom-client": "^15.1.3",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.2",
+    "typeorm": "^0.3.31",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.6.6",
+    "@types/bun": "^1.4.4",
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.6.6",
+    "@types/pg": "^8.23.1",
+    "typescript": "5.9"
+  },
+  "scripts": {
+    "infra:up": "docker compose up -d --wait postgres localstack",
+    "infra:down": "docker compose down -v",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "test": "bun test test/unit"
+  },
+  "engines": {
+    "bun": ">=1.1"
+  }
+}
