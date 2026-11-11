@@ -31,7 +31,12 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
-    "test": "bun test test/unit"
+    "test": "bun test test/unit",
+    "migration:up": "bun run scripts/migrate.ts up",
+    "migration:down": "bun run scripts/migrate.ts down",
+    "migration:status": "bun run scripts/migrate.ts status",
+    "test:unit": "bun test test/unit",
+    "test:integration": "bun test --timeout 60000 test/integration"
   },
   "engines": {
     "bun": ">=1.1"
