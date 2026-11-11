@@ -15,6 +15,16 @@ export interface UnitOfWorkSettings {
   maxRetries: number;
 }
 
+/**
+ * Unique races that resolve themselves on retry: the second attempt sees the committed row and answers
+ * replay / conflict / REFERENCE_ALREADY_REVERSED instead.
+ */
+const RETRYABLE_UNIQUE_CONSTRAINTS = new Set([
+  "uq_wager_idempotency_key",
+  "uq_wager_provider_external_id",
+  "uq_wager_reversed_once",
+]);
+
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
@@ -32,7 +42,7 @@ export class TypeOrmUnitOfWork implements UnitOfWork {
   async run<T>(work: (ctx: TransactionContext) => Promise<T>, options: UnitOfWorkOptions): Promise<T> {
     for (let attempt = 1; ; attempt++) {
       try {
-        return await this.dataSource.transaction("READ COMMITTED", async (manager) => {
+        return await this.dataSource.transaction(options.isolation ?? "READ COMMITTED", async (manager) => {
           await manager.query(
             `SELECT set_config('lock_timeout', $1, true), set_config('statement_timeout', $2, true)`,
             [`${this.settings.lockTimeoutMs}ms`, `${this.settings.statementTimeoutMs}ms`],
@@ -63,11 +73,7 @@ export class TypeOrmUnitOfWork implements UnitOfWork {
     return (
       isTransientDbError(error) ||
       error instanceof ConcurrencyConflictError ||
-      // A unique race (two first-time requests for the same key on different wallets) resolves itself on retry:
-      // the second attempt finds the committed row and answers replay/conflict.
-      (error instanceof UniqueViolationError &&
-        (error.constraint === "uq_wager_idempotency_key" ||
-          error.constraint === "uq_wager_provider_external_id"))
+      (error instanceof UniqueViolationError && RETRYABLE_UNIQUE_CONSTRAINTS.has(error.constraint ?? ""))
     );
   }
 

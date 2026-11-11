@@ -95,6 +95,8 @@ export interface TransactionContext {
 export interface UnitOfWorkOptions {
   /** Label used in logs/metrics. */
   name: string;
+  /** Defaults to READ COMMITTED. REPEATABLE READ gives one snapshot for consistent multi-read reports. */
+  isolation?: "READ COMMITTED" | "REPEATABLE READ";
 }
 
 export interface UnitOfWork {
