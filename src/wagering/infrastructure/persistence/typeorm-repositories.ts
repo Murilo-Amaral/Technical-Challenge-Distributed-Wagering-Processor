@@ -328,7 +328,7 @@ export class TypeOrmOutboxRepository implements OutboxRepository {
   }
 
   async claimDue(now: Date, limit: number, leaseMs: number, owner: string): Promise<OutboxMessage[]> {
-    const rows: Array<Record<string, unknown>> = await this.m.query(
+    const result: unknown = await this.m.query(
       `UPDATE outbox_messages o
           SET locked_until = $1::timestamptz + make_interval(secs => $3::double precision / 1000),
               locked_by = $4
@@ -343,6 +343,10 @@ export class TypeOrmOutboxRepository implements OutboxRepository {
       RETURNING o.*`,
       [now, limit, leaseMs, owner],
     );
+    // For UPDATE ... RETURNING the TypeORM postgres driver returns [rows, affectedCount].
+    const rows = (Array.isArray(result) && Array.isArray(result[0]) ? result[0] : result) as Array<
+      Record<string, unknown>
+    >;
     return rows
       .map(
         (r): OutboxMessageRecord => ({

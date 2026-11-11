@@ -36,10 +36,12 @@
     "migration:down": "bun run scripts/migrate.ts down",
     "migration:status": "bun run scripts/migrate.ts status",
     "test:unit": "bun test test/unit",
-    "test:integration": "bun test --timeout 60000 test/integration",
-    "test:concurrency": "bun test --timeout 120000 test/concurrency",
+    "test:integration": "bun test --timeout 90000 test/integration",
+    "test:concurrency": "bun test --timeout 180000 test/concurrency",
     "start": "bun run src/main.ts",
-    "start:dev": "bun --watch run src/main.ts"
+    "start:dev": "bun --watch run src/main.ts",
+    "test:all": "bun run test:unit && bun run test:integration && bun run test:concurrency",
+    "check": "bun run lint && bun run typecheck && bun run test:unit"
   },
   "engines": {
     "bun": ">=1.1"

@@ -1,4 +1,13 @@
-import { type DynamicModule, type MiddlewareConsumer, Module, type NestModule } from "@nestjs/common";
+import {
+  type BeforeApplicationShutdown,
+  type DynamicModule,
+  Inject,
+  Injectable,
+  type MiddlewareConsumer,
+  Module,
+  type NestModule,
+  type OnApplicationBootstrap,
+} from "@nestjs/common";
 import { APP_FILTER, APP_GUARD } from "@nestjs/core";
 import type { Container } from "../bootstrap/container";
 import { CreateWallet } from "./application/create-wallet";
@@ -13,6 +22,22 @@ import { HealthController, METRICS_REGISTRY, READINESS_PROBES } from "./interfac
 import { HttpExceptionFilter } from "./interface/http/http-exception.filter";
 import { WageringController } from "./interface/http/wagering.controller";
 import { WalletsController } from "./interface/http/wallets.controller";
+
+const WORKERS = Symbol("WORKERS");
+
+/** Starts background workers once the app is up; stops them (draining in-flight work) before shutdown. */
+@Injectable()
+class WorkersLifecycle implements OnApplicationBootstrap, BeforeApplicationShutdown {
+  constructor(@Inject(WORKERS) private readonly workers: Container["workers"]) {}
+
+  onApplicationBootstrap(): void {
+    this.workers.start();
+  }
+
+  async beforeApplicationShutdown(): Promise<void> {
+    await this.workers.stop();
+  }
+}
 
 @Module({})
 export class WageringModule implements NestModule {
@@ -29,6 +54,8 @@ export class WageringModule implements NestModule {
         { provide: CreateWallet, useValue: container.createWallet },
         { provide: ReconcileWallet, useValue: container.reconcileWallet },
         { provide: WageringQueries, useValue: container.queries },
+        { provide: WORKERS, useValue: container.workers },
+        WorkersLifecycle,
         { provide: APP_GUARD, useClass: AuthGuard },
         { provide: APP_FILTER, useClass: HttpExceptionFilter },
       ],

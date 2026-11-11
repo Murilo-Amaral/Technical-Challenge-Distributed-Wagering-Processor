@@ -5,6 +5,7 @@ import type { AppConfig } from "../config/app-config";
 import { CreateWallet } from "../wagering/application/create-wallet";
 import type { AppLogger } from "../wagering/application/logger";
 import { ProcessPendingReferences } from "../wagering/application/process-pending-references";
+import { PublishOutbox } from "../wagering/application/publish-outbox";
 import { WageringQueries } from "../wagering/application/queries";
 import { ReconcileWallet } from "../wagering/application/reconcile-wallet";
 import { SubmitWagerTransaction } from "../wagering/application/submit-wager-transaction";
@@ -16,11 +17,14 @@ import {
   type QueueUrls,
   resolveQueues,
 } from "../wagering/infrastructure/messaging/sqs";
+import { SqsEventPublisher } from "../wagering/infrastructure/messaging/sqs-event-publisher";
+import { SqsWagerConsumer } from "../wagering/infrastructure/messaging/sqs-wager-consumer";
 import { PinoAppLogger } from "../wagering/infrastructure/observability/pino-logger";
 import { PrometheusMetrics } from "../wagering/infrastructure/observability/prometheus-metrics";
 import { createDataSource } from "../wagering/infrastructure/persistence/data-source";
 import { TypeOrmUnitOfWork } from "../wagering/infrastructure/persistence/typeorm-unit-of-work";
 import { SystemClock, UuidV7Generator } from "../wagering/infrastructure/system";
+import { PeriodicRunner, type PeriodicTask } from "../wagering/infrastructure/workers";
 import {
   DisabledTokenVerifier,
   OidcTokenVerifier,
@@ -118,6 +122,83 @@ export async function buildContainer(config: AppConfig) {
     },
   ];
 
+  const submitWagerTransaction = new SubmitWagerTransaction(uow, processor, clock, ids, metrics, logger);
+  const processPendingReferences = new ProcessPendingReferences(
+    uow,
+    processor,
+    clock,
+    metrics,
+    logger,
+    config.PENDING_REF_BATCH_SIZE,
+  );
+  const publishOutbox = new PublishOutbox(
+    uow,
+    new SqsEventPublisher(sqs, queues.eventsQueueUrl),
+    clock,
+    metrics,
+    logger,
+    {
+      batchSize: config.OUTBOX_BATCH_SIZE,
+      leaseMs: config.OUTBOX_LEASE_MS,
+      owner: config.instanceId,
+      retryPolicy: ExponentialBackoff.of({
+        baseDelayMs: config.OUTBOX_RETRY_BASE_MS,
+        maxDelayMs: config.OUTBOX_RETRY_MAX_MS,
+        maxAttempts: Number.MAX_SAFE_INTEGER,
+      }),
+    },
+  );
+
+  const consumer = config.workers.has("consumer")
+    ? new SqsWagerConsumer(sqs, submitWagerTransaction, metrics, logger, {
+        queueUrl: queues.wagerQueueUrl,
+        dlqUrl: queues.wagerDlqUrl,
+        consumerName: config.CONSUMER_NAME,
+        visibilityTimeoutSeconds: config.CONSUMER_VISIBILITY_TIMEOUT_S,
+        waitTimeSeconds: config.CONSUMER_WAIT_TIME_S,
+        maxReceives: config.CONSUMER_MAX_RECEIVES,
+        retryBaseSeconds: config.CONSUMER_RETRY_BASE_S,
+        retryMaxSeconds: config.CONSUMER_RETRY_MAX_S,
+        shutdownGraceMs: config.SHUTDOWN_GRACE_MS,
+        faultInjection: config.FAULT_INJECTION,
+      })
+    : undefined;
+
+  const tasks: PeriodicTask[] = [];
+  if (config.workers.has("outbox")) {
+    tasks.push({
+      name: "outbox-relay",
+      intervalMs: config.OUTBOX_POLL_MS,
+      step: () => publishOutbox.runOnce(),
+    });
+    tasks.push({
+      name: "outbox-lag",
+      intervalMs: 5000,
+      step: async () => {
+        await publishOutbox.refreshLag();
+        return 0;
+      },
+    });
+  }
+  if (config.workers.has("pending-references")) {
+    tasks.push({
+      name: "pending-references",
+      intervalMs: config.PENDING_REF_POLL_MS,
+      step: () => processPendingReferences.runOnce(),
+    });
+  }
+  const runner = new PeriodicRunner(tasks, logger);
+
+  const workers = {
+    start(): void {
+      consumer?.start();
+      runner.start();
+    },
+    async stop(): Promise<void> {
+      await Promise.all([consumer?.stop(), runner.stop()]);
+    },
+  };
+
   return {
     config,
     logger,
@@ -131,18 +212,13 @@ export async function buildContainer(config: AppConfig) {
     processor,
     tokenVerifier,
     readinessProbes,
-    submitWagerTransaction: new SubmitWagerTransaction(uow, processor, clock, ids, metrics, logger),
+    submitWagerTransaction,
+    publishOutbox,
+    workers,
     createWallet: new CreateWallet(uow, clock, ids, logger),
     reconcileWallet: new ReconcileWallet(uow, metrics, logger),
     queries: new WageringQueries(uow),
-    processPendingReferences: new ProcessPendingReferences(
-      uow,
-      processor,
-      clock,
-      metrics,
-      logger,
-      config.PENDING_REF_BATCH_SIZE,
-    ),
+    processPendingReferences,
   };
 }
 
