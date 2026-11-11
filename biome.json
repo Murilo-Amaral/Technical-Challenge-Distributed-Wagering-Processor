@@ -9,7 +9,7 @@
   "linter": {
     "enabled": true,
     "rules": {
-      "recommended": true,
+      "preset": "recommended",
       "style": { "useImportType": "off", "noNonNullAssertion": "off", "useNodejsImportProtocol": "error" },
       "suspicious": { "noExplicitAny": "error" },
       "complexity": { "noStaticOnlyClass": "off" }
