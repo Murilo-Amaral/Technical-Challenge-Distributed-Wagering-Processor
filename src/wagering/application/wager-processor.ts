@@ -74,15 +74,11 @@ export class WagerProcessor {
     // Resolved by (providerId, referenceExternalTransactionId). The reference may live in another wallet: then the
     // context check rejects it. Reading it without locking is safe because only terminal (immutable) references are
     // ever used to settle; non-terminal ones keep the dependent waiting.
-    const reference = await ctx.transactions.findByProviderExternalId(
-      tx.providerId,
-      tx.referenceExternalTransactionId!,
-    );
+    const reference = await ctx.transactions.findReference(tx.providerId, tx.referenceExternalTransactionId!);
     if (!reference) {
       return { found: false };
     }
-    const alreadyReversed = await ctx.transactions.hasProcessedReversal(reference.id);
-    return { found: true, transaction: reference, alreadyReversed };
+    return { found: true, transaction: reference.transaction, alreadyReversed: reference.reversed };
   }
 
   private async persistEffects(

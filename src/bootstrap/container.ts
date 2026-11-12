@@ -67,6 +67,7 @@ export async function buildContainer(config: AppConfig) {
       url: config.DATABASE_URL,
       poolSize: config.DB_POOL_SIZE,
       applicationName: `wagering-${config.instanceId}`,
+      queryTimeoutMs: config.DB_STATEMENT_TIMEOUT_MS + 5000,
     }).initialize(),
   );
 
@@ -160,6 +161,8 @@ export async function buildContainer(config: AppConfig) {
         retryBaseSeconds: config.CONSUMER_RETRY_BASE_S,
         retryMaxSeconds: config.CONSUMER_RETRY_MAX_S,
         shutdownGraceMs: config.SHUTDOWN_GRACE_MS,
+        maxInFlightBatches:
+          config.CONSUMER_MAX_IN_FLIGHT_BATCHES ?? Math.max(1, Math.floor(config.DB_POOL_SIZE / 10)),
         faultInjection: config.FAULT_INJECTION,
       })
     : undefined;

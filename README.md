@@ -258,6 +258,7 @@ Todas as variáveis são validadas na inicialização (`src/config/app-config.ts
 | `SQS_ENDPOINT` / `SQS_CREATE_QUEUES` | — / `true` | LocalStack; criação idempotente das filas |
 | `WORKERS` | `consumer,outbox,pending-references` | Componentes de background que este processo roda |
 | `CONSUMER_MAX_RECEIVES` / `CONSUMER_RETRY_BASE_S` | `5` / `2` | Tentativas antes da DLQ; backoff base |
+| `CONSUMER_MAX_IN_FLIGHT_BATCHES` | `DB_POOL_SIZE / 10` (mín. 1) | Lotes SQS (≤ 10 mensagens) processados em paralelo |
 | `PENDING_REF_MAX_ATTEMPTS` / `PENDING_REF_BASE_DELAY_MS` / `PENDING_REF_MAX_DELAY_MS` | `10` / `2000` / `120000` | Janela de espera por referências fora de ordem |
 | `OUTBOX_BATCH_SIZE` / `OUTBOX_POLL_MS` / `OUTBOX_LEASE_MS` | `50` / `500` / `30000` | Relay da outbox |
 | `AUTH_MODE` | `disabled` (local) / `keycloak` (Compose) | Autenticação |

@@ -17,11 +17,7 @@ import type { InboxMessage } from "../../domain/inbox-message";
 import type { LedgerJournal } from "../../domain/ledger";
 import { Money } from "../../domain/money";
 import type { OutboxMessage } from "../../domain/outbox-message";
-import {
-  REVERSAL_KINDS,
-  type WagerTransaction,
-  WagerTransactionStatus,
-} from "../../domain/wager-transaction";
+import { type WagerTransaction, WagerTransactionStatus } from "../../domain/wager-transaction";
 import type { Wallet } from "../../domain/wallet";
 import { decodeLedgerCursor, encodeLedgerCursor } from "./ledger-cursor";
 import {
@@ -133,8 +129,11 @@ export class TypeOrmWagerTransactionRepository implements WagerTransactionReposi
     return r ? transactionToDomain(r) : undefined;
   }
 
-  async findByIdempotencyKey(idempotencyKey: string): Promise<WagerTransaction | undefined> {
-    const r = await this.m.findOneBy(WagerTransactionSchema, { idempotencyKey });
+  async findByIdempotencyKey(
+    providerId: string,
+    idempotencyKey: string,
+  ): Promise<WagerTransaction | undefined> {
+    const r = await this.m.findOneBy(WagerTransactionSchema, { providerId, idempotencyKey });
     return r ? transactionToDomain(r) : undefined;
   }
 
@@ -146,14 +145,26 @@ export class TypeOrmWagerTransactionRepository implements WagerTransactionReposi
     return r ? transactionToDomain(r) : undefined;
   }
 
-  async hasProcessedReversal(referenceTransactionId: string): Promise<boolean> {
-    const count = await this.m
+  async findReference(
+    providerId: string,
+    externalTransactionId: string,
+  ): Promise<{ transaction: WagerTransaction; reversed: boolean } | undefined> {
+    const { entities, raw } = await this.m
       .createQueryBuilder(WagerTransactionSchema, "t")
-      .where("t.reference_transaction_id = :referenceTransactionId", { referenceTransactionId })
-      .andWhere("t.kind IN (:...kinds)", { kinds: REVERSAL_KINDS })
-      .andWhere("t.status = :status", { status: WagerTransactionStatus.Processed })
-      .getCount();
-    return count > 0;
+      .addSelect(
+        `EXISTS (SELECT 1 FROM wager_transactions r
+                  WHERE r.reference_transaction_id = t.id
+                    AND r.kind IN ('REFUND','ROLLBACK')
+                    AND r.status = 'PROCESSED')`,
+        "reversed",
+      )
+      .where("t.provider_id = :providerId", { providerId })
+      .andWhere("t.external_transaction_id = :externalTransactionId", { externalTransactionId })
+      .getRawAndEntities<{ reversed: boolean }>();
+    const record = entities[0];
+    return record
+      ? { transaction: transactionToDomain(record), reversed: raw[0]?.reversed === true }
+      : undefined;
   }
 
   async findPendingDependents(
@@ -337,7 +348,15 @@ export class TypeOrmOutboxRepository implements OutboxRepository {
                WHERE published_at IS NULL
                  AND next_attempt_at <= $1
                  AND (locked_until IS NULL OR locked_until < $1)
-               ORDER BY next_attempt_at, occurred_at
+                 -- Per-wallet order: never claim an event while an older unpublished event of the same partition
+                 -- is not claimable right now (still backing off, or leased by another publisher).
+                 AND NOT EXISTS (
+                       SELECT 1 FROM outbox_messages older
+                        WHERE older.partition_key = outbox_messages.partition_key
+                          AND older.published_at IS NULL
+                          AND (older.occurred_at, older.id) < (outbox_messages.occurred_at, outbox_messages.id)
+                          AND (older.next_attempt_at > $1 OR older.locked_until >= $1))
+               ORDER BY occurred_at, id
                LIMIT $2
                FOR UPDATE SKIP LOCKED)
       RETURNING o.*`,
@@ -347,25 +366,32 @@ export class TypeOrmOutboxRepository implements OutboxRepository {
     const rows = (Array.isArray(result) && Array.isArray(result[0]) ? result[0] : result) as Array<
       Record<string, unknown>
     >;
-    return rows
-      .map(
-        (r): OutboxMessageRecord => ({
-          id: r.id as string,
-          aggregateId: r.aggregate_id as string,
-          partitionKey: r.partition_key as string,
-          eventType: r.event_type as string,
-          payload: r.payload as Record<string, unknown>,
-          occurredAt: r.occurred_at as Date,
-          attempts: r.attempts as number,
-          nextAttemptAt: r.next_attempt_at as Date,
-          publishedAt: (r.published_at as Date | null) ?? null,
-          lockedUntil: (r.locked_until as Date | null) ?? null,
-          lockedBy: (r.locked_by as string | null) ?? null,
-          lastError: (r.last_error as string | null) ?? null,
-        }),
-      )
-      .sort((a, b) => a.occurredAt.getTime() - b.occurredAt.getTime())
-      .map(outboxToDomain);
+    return (
+      rows
+        .map(
+          (r): OutboxMessageRecord => ({
+            id: r.id as string,
+            aggregateId: r.aggregate_id as string,
+            partitionKey: r.partition_key as string,
+            eventType: r.event_type as string,
+            payload: r.payload as Record<string, unknown>,
+            occurredAt: r.occurred_at as Date,
+            attempts: r.attempts as number,
+            nextAttemptAt: r.next_attempt_at as Date,
+            publishedAt: (r.published_at as Date | null) ?? null,
+            lockedUntil: (r.locked_until as Date | null) ?? null,
+            lockedBy: (r.locked_by as string | null) ?? null,
+            lastError: (r.last_error as string | null) ?? null,
+          }),
+        )
+        // UPDATE ... RETURNING has no guaranteed order: re-sort by the same (occurred_at, id) key used to claim, so events
+        // of one transaction (same occurred_at) keep their creation order (UUIDv7 ids are time-ordered).
+        .sort(
+          (a, b) =>
+            a.occurredAt.getTime() - b.occurredAt.getTime() || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+        )
+        .map(outboxToDomain)
+    );
   }
 
   async markPublished(message: OutboxMessage): Promise<void> {

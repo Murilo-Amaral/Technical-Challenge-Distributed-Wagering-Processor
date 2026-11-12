@@ -26,6 +26,8 @@ export interface ConsumerSettings {
   retryBaseSeconds: number;
   retryMaxSeconds: number;
   shutdownGraceMs: number;
+  /** Batches (≤ 10 messages each) processed concurrently; keep batches × 10 within the DB pool. */
+  maxInFlightBatches: number;
   /** Test-only fault injection, e.g. "crash-after-commit-before-ack". */
   faultInjection?: string | undefined;
 }
@@ -34,8 +36,6 @@ type Decision =
   | { action: "ack"; outcome: string }
   | { action: "dlq"; reason: string }
   | { action: "retry"; reason: string };
-
-const MAX_IN_FLIGHT_BATCHES = 4;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -120,7 +120,7 @@ export class SqsWagerConsumer {
       // has in-flight messages, so per-wallet ordering is preserved. In-flight batches are bounded.
       const batch = this.processBatch(messages).finally(() => this.inFlight.delete(batch));
       this.inFlight.add(batch);
-      if (this.inFlight.size >= MAX_IN_FLIGHT_BATCHES) await Promise.race(this.inFlight);
+      if (this.inFlight.size >= this.settings.maxInFlightBatches) await Promise.race(this.inFlight);
     }
   }
 

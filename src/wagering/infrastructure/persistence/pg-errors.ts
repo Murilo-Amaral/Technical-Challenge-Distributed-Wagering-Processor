@@ -31,6 +31,7 @@ const TRANSIENT_NODE_CODES = new Set([
   "EAI_AGAIN",
 ]);
 const TRANSIENT_MESSAGES = [
+  /Query read timeout/i,
   /Connection terminated/i,
   /timeout exceeded when trying to connect/i,
   /Client has encountered a connection error/i,

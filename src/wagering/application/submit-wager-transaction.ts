@@ -81,7 +81,7 @@ export class SubmitWagerTransaction {
         log.info("duplicate queue message ignored (inbox)", { payloadMismatch });
         return {
           type: "duplicate-message",
-          transaction: await ctx.transactions.findByIdempotencyKey(cmd.idempotencyKey),
+          transaction: await ctx.transactions.findByIdempotencyKey(cmd.providerId, cmd.idempotencyKey),
           payloadMismatch,
         };
       }
@@ -127,7 +127,7 @@ export class SubmitWagerTransaction {
     cmd: WagerCommand,
     source: SubmitOptions["source"],
   ): Promise<WagerTransaction | undefined> {
-    const byKey = await ctx.transactions.findByIdempotencyKey(cmd.idempotencyKey);
+    const byKey = await ctx.transactions.findByIdempotencyKey(cmd.providerId, cmd.idempotencyKey);
     if (byKey) {
       if (!byKey.matchesPayload(cmd.payloadHash)) {
         this.metrics.duplicateDetected({ source, type: "conflict" });

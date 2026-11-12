@@ -27,6 +27,8 @@ const schema = z.object({
   CONSUMER_MAX_RECEIVES: int(5),
   CONSUMER_RETRY_BASE_S: int(2),
   CONSUMER_RETRY_MAX_S: int(60),
+  /** Defaults to DB_POOL_SIZE / 10 (at least 1) so concurrent messages do not exceed the connection pool. */
+  CONSUMER_MAX_IN_FLIGHT_BATCHES: z.coerce.number().int().positive().optional(),
 
   WORKERS: z.string().default("consumer,outbox,pending-references"),
   OUTBOX_POLL_MS: int(500),

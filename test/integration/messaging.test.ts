@@ -43,6 +43,7 @@ const settings = (overrides: Partial<ConsumerSettings> = {}): ConsumerSettings =
   retryBaseSeconds: 1,
   retryMaxSeconds: 2,
   shutdownGraceMs: 10_000,
+  maxInFlightBatches: 2,
   ...overrides,
 });
 
@@ -352,6 +353,37 @@ describe("transactional outbox relay", () => {
     const delivered = await receiveAll(sqs, queues.eventsQueueUrl, 100, 2);
     const ids = delivered.map((m) => (JSON.parse(m.Body!) as { eventId: string }).eventId);
     expect(ids).toHaveLength(new Set(ids).size);
+  });
+
+  test("claim keeps per-wallet order: a newer event waits while an older one of the same wallet is backing off", async () => {
+    const publisher = new SqsEventPublisher(sqs, queues.eventsQueueUrl);
+    while ((await publishOutbox(publisher, "pre-order").runOnce()) > 0) {}
+    await openWallet(h, "10.00"); // 2 events on the same wallet partition
+    const [older, newer] = await ds.query(
+      "SELECT id FROM outbox_messages WHERE published_at IS NULL ORDER BY occurred_at, id",
+    );
+    const ours = (ids: string[]) => ids.filter((id) => id === older.id || id === newer.id);
+    const claim = async () =>
+      (await h.uow.run((ctx) => ctx.outbox.claimDue(new Date(), 50, 1000, "order-test"), { name: "t" })).map(
+        (m) => m.id,
+      );
+    const release = () =>
+      // Times come from the application clock (as in production), never from the database clock.
+      ds.query("UPDATE outbox_messages SET next_attempt_at = $2, locked_until = NULL WHERE id = ANY($1)", [
+        [older.id, newer.id],
+        new Date(Date.now() - 1000),
+      ]);
+
+    // The older one failed and is backing off; the newer one is due but must wait.
+    await ds.query("UPDATE outbox_messages SET next_attempt_at = $2 WHERE id = $1", [
+      older.id,
+      new Date(Date.now() + 3_600_000),
+    ]);
+    expect(ours(await claim())).toEqual([]);
+    await release();
+    expect(ours(await claim())).toEqual([older.id, newer.id]);
+    await release();
+    while ((await publishOutbox(publisher, "post-order").runOnce()) > 0) {}
   });
 
   test("broker failures schedule a retry with backoff and never lose the event", async () => {

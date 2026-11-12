@@ -20,18 +20,26 @@ export class SqsEventPublisher implements EventPublisher {
     const result: PublishResult = { succeeded: [], failed: [] };
     // Once an event of a partition fails, its later events are held back so they are not published ahead of it.
     const blocked = new Set<string>();
-    const pending = [...messages];
+    let pending = [...messages];
     while (pending.length > 0) {
+      // At most one event per partition per batch call: SQS may accept a later entry of a group and reject an earlier
+      // one in the same call, which would publish them out of order.
       const chunk: OutboxMessage[] = [];
-      while (pending.length > 0 && chunk.length < SQS_BATCH_LIMIT) {
-        const m = pending.shift()!;
+      const seen = new Set<string>();
+      const rest: OutboxMessage[] = [];
+      for (const m of pending) {
         if (blocked.has(m.partitionKey)) {
           result.failed.push({ id: m.id, error: "held back: an earlier event of this partition failed" });
-        } else {
+        } else if (chunk.length < SQS_BATCH_LIMIT && !seen.has(m.partitionKey)) {
           chunk.push(m);
+          seen.add(m.partitionKey);
+        } else {
+          rest.push(m);
+          seen.add(m.partitionKey);
         }
       }
-      if (chunk.length === 0) break;
+      pending = rest;
+      if (chunk.length === 0) continue;
       try {
         const response = await this.sqs.send(
           new SendMessageBatchCommand({

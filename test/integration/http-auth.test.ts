@@ -81,6 +81,23 @@ describe("OIDC authentication (Keycloak mode)", () => {
     expect((await call("/wallets/x", await providerToken("provider-a", { exp: "-1m" }))).status).toBe(401);
   });
 
+  test("an unreachable JWKS endpoint is a retryable 503, not 401", async () => {
+    const down = await startTestApp({
+      AUTH_MODE: "keycloak",
+      OIDC_ISSUER_URL: ISSUER,
+      OIDC_JWKS_URL: "http://127.0.0.1:1/certs",
+      OIDC_AUDIENCE: "wagering-api",
+    });
+    try {
+      const res = await fetch(`${down.baseUrl}/wallets/00000000-0000-7000-8000-000000000000`, {
+        headers: { authorization: `Bearer ${await operatorToken()}` },
+      });
+      expect(res.status).toBe(503);
+    } finally {
+      await down.close();
+    }
+  });
+
   test("roles: providers cannot manage wallets, operators can", async () => {
     const body = JSON.stringify({
       playerId: crypto.randomUUID(),
