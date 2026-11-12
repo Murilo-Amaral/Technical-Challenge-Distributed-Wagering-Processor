@@ -18,8 +18,20 @@ export class SqsEventPublisher implements EventPublisher {
 
   async publish(messages: OutboxMessage[]): Promise<PublishResult> {
     const result: PublishResult = { succeeded: [], failed: [] };
-    for (let i = 0; i < messages.length; i += SQS_BATCH_LIMIT) {
-      const chunk = messages.slice(i, i + SQS_BATCH_LIMIT);
+    // Once an event of a partition fails, its later events are held back so they are not published ahead of it.
+    const blocked = new Set<string>();
+    const pending = [...messages];
+    while (pending.length > 0) {
+      const chunk: OutboxMessage[] = [];
+      while (pending.length > 0 && chunk.length < SQS_BATCH_LIMIT) {
+        const m = pending.shift()!;
+        if (blocked.has(m.partitionKey)) {
+          result.failed.push({ id: m.id, error: "held back: an earlier event of this partition failed" });
+        } else {
+          chunk.push(m);
+        }
+      }
+      if (chunk.length === 0) break;
       try {
         const response = await this.sqs.send(
           new SendMessageBatchCommand({
@@ -35,11 +47,15 @@ export class SqsEventPublisher implements EventPublisher {
         );
         for (const ok of response.Successful ?? []) result.succeeded.push(chunk[Number(ok.Id)]!.id);
         for (const ko of response.Failed ?? []) {
-          result.failed.push({ id: chunk[Number(ko.Id)]!.id, error: `${ko.Code}: ${ko.Message ?? ""}` });
+          const m = chunk[Number(ko.Id)]!;
+          blocked.add(m.partitionKey);
+          result.failed.push({ id: m.id, error: `${ko.Code}: ${ko.Message ?? ""}` });
         }
       } catch (error) {
-        for (const m of chunk)
+        for (const m of chunk) {
+          blocked.add(m.partitionKey);
           result.failed.push({ id: m.id, error: error instanceof Error ? error.message : String(error) });
+        }
       }
     }
     return result;

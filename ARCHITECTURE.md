@@ -163,7 +163,8 @@ Serviço de domínio puro, com as regras da seção 7 do enunciado. A ordem das 
    - não processada → `REFERENCE_NOT_PROCESSED`;
    - tipo não permitido → `REFERENCE_KIND_NOT_ALLOWED`;
    - contexto diferente (provider, player, wallet, moeda ou rodada) → `REFERENCE_CONTEXT_MISMATCH`;
-   - nas reversões, valor diferente → `AMOUNT_MISMATCH`, e referência já revertida → `REFERENCE_ALREADY_REVERSED`;
+   - nas reversões, valor diferente → `AMOUNT_MISMATCH`;
+   - referência já revertida → `REFERENCE_ALREADY_REVERSED` (qualquer operação);
 4. aplicação no saldo: débito sem saldo → `INSUFFICIENT_FUNDS` para BET e `REVERSAL_INSUFFICIENT_FUNDS` para
    ROLLBACK.
 
@@ -333,7 +334,7 @@ Todos são estáveis e legíveis por máquina (`domain/failure-code.ts` e `appli
 | `REFERENCE_KIND_NOT_ALLOWED` | Ex.: REFUND de WIN, ROLLBACK de LOSS | Corrigir o payload |
 | `REFERENCE_CONTEXT_MISMATCH` | Referência de outro player, wallet, moeda ou rodada | Corrigir o payload |
 | `REFERENCE_NOT_PROCESSED` | A referência foi REJECTED/FAILED | Desistir: nada a reverter |
-| `REFERENCE_ALREADY_REVERSED` | A referência já foi revertida | Desistir: já aplicado |
+| `REFERENCE_ALREADY_REVERSED` | A referência já foi revertida (vale para reversões e para WIN/LOSS sobre BET estornada) | Desistir: já aplicado |
 | `AMOUNT_MISMATCH` | Valor da reversão ≠ valor da referência | Corrigir o payload (reversão parcial fora de escopo) |
 
 **Falha terminal** (`status = FAILED`): `PROCESSING_FAILED`, erro permanente ao reprocessar. Exige investigação
@@ -366,7 +367,8 @@ consistente entre todos os endpoints:
 `infrastructure/messaging/sqs-wager-consumer.ts`.
 
 - Long polling de até 10 mensagens. Mensagens do mesmo `MessageGroupId` (wallet) são processadas **em sequência**;
-  grupos diferentes, **em paralelo**.
+  grupos diferentes, **em paralelo**. O polling continua enquanto um lote é processado (até 4 lotes em andamento),
+  para um grupo lento não travar os demais; o SQS FIFO não entrega um grupo que ainda tem mensagens em andamento.
 - Usa o **mesmo use case** do HTTP, com a inbox `(consumerName, messageId)` na mesma transação. O `data` passa pela
   mesma validação do corpo HTTP.
 - **Ack (`DeleteMessage`) somente depois do commit.** Se o processo morrer entre o commit e o ack, a mensagem reaparece
@@ -431,7 +433,8 @@ Não vale pontos no desafio, mas foi pedida integração com IdP externo. **Keyc
 - A API valida o JWT **localmente** contra o JWKS do realm (`jose`, com cache e rotação de chaves), conferindo
   assinatura RS256, `iss`, `aud` e `exp`. Não há chamada ao IdP por requisição.
 - **`ProviderIdentityPolicy`** (`auth/provider-identity.ts`): um provedor só submete ou lê transações cujo
-  `providerId` é o do seu token. Operadores podem tudo.
+  `providerId` é o do seu token. Operadores podem tudo. Em `GET /wagering/transactions/:id`, a transação de outro
+  provedor responde 404, igual a um id inexistente, para não revelar existência.
 - Health e métricas são abertos. Mensagens da fila são canal interno confiável, mas o `providerId` delas passa pelas
   mesmas validações de domínio, e a resolução de referência é sempre escopada por provider.
 - **Sem segredos no repositório:** os client secrets são gerados pelo Keycloak na importação, e a senha de admin vem
@@ -485,7 +488,8 @@ Não vale pontos no desafio, mas foi pedida integração com IdP externo. **Keyc
    ROLLBACK da mesma BET creditaria o jogador duas vezes. Desfazer um REFUND continua possível, via ROLLBACK *do
    REFUND*, que é outra referência. Garantido por `uq_wager_reversed_once`.
 2. **WIN e LOSS podem referenciar** uma BET, que deve ser da mesma rodada. Se a referência for informada e não
-   existir, eles também ficam `PENDING_REFERENCE`.
+   existir, eles também ficam `PENDING_REFERENCE`. Uma BET já revertida (REFUND/ROLLBACK) não pode mais ser
+   liquidada por WIN/LOSS: `REFERENCE_ALREADY_REVERSED`.
 3. **LOSS aceita valor `0.00`.** As demais operações exigem valor > 0.
 4. **Wallet inexistente** na submissão: 404 `WALLET_NOT_FOUND`, sem persistir nada, porque a FK impede uma transação
    órfã. Via SQS vai para a DLQ, para não perder a mensagem. Se a wallet for criada depois, a mesma chave será

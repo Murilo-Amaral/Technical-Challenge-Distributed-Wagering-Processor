@@ -104,6 +104,19 @@ describe("WIN", () => {
   });
 });
 
+describe("WIN after a reversal", () => {
+  test("a WIN referencing an already refunded BET is rejected", () => {
+    const wallet = openWallet("100.00");
+    const bet = processedBet(wallet);
+    const win = wagerTx({ kind: K.Win, amount: "60.00", reference: bet.externalTransactionId });
+    expect(settle(wallet, win, found(bet, true))).toEqual({
+      kind: "rejected",
+      failureCode: FailureCode.ReferenceAlreadyReversed,
+    });
+    expect(wallet.balance.amount).toBe("70.00");
+  });
+});
+
 describe("LOSS", () => {
   test("is processed without moving the balance or producing a journal", () => {
     const wallet = openWallet("100.00");

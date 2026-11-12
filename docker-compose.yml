@@ -83,7 +83,6 @@ services:
     depends_on:
       migrate: { condition: service_completed_successfully }
       localstack: { condition: service_healthy }
-      keycloak: { condition: service_healthy }
     healthcheck:
       test: ["CMD-SHELL", "bun -e \"fetch('http://127.0.0.1:3000/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
       interval: 5s
@@ -103,7 +102,6 @@ services:
     depends_on:
       migrate: { condition: service_completed_successfully }
       localstack: { condition: service_healthy }
-      keycloak: { condition: service_healthy }
 
 volumes:
   pgdata:

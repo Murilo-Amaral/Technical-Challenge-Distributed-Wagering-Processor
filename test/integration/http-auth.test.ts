@@ -129,9 +129,10 @@ describe("OIDC authentication (Keycloak mode)", () => {
     expect(owner.status).toBe(201);
     const { transactionId } = (await owner.json()) as { transactionId: string };
 
+    // Another provider gets the same answer as for a missing id (no existence probing).
     expect(
       (await call(`/wagering/transactions/${transactionId}`, await providerToken("provider-b"))).status,
-    ).toBe(403);
+    ).toBe(404);
     expect(
       (await call(`/wagering/transactions/${transactionId}`, await providerToken("provider-a"))).status,
     ).toBe(200);

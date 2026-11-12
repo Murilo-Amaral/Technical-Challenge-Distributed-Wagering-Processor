@@ -35,6 +35,8 @@ type Decision =
   | { action: "dlq"; reason: string }
   | { action: "retry"; reason: string };
 
+const MAX_IN_FLIGHT_BATCHES = 4;
+
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
@@ -114,9 +116,11 @@ export class SqsWagerConsumer {
         continue;
       }
       if (messages.length === 0) continue;
-      const batch = this.processBatch(messages);
+      // Not awaited: other groups keep flowing while a slow group drains. SQS FIFO never hands out a group that still
+      // has in-flight messages, so per-wallet ordering is preserved. In-flight batches are bounded.
+      const batch = this.processBatch(messages).finally(() => this.inFlight.delete(batch));
       this.inFlight.add(batch);
-      await batch.finally(() => this.inFlight.delete(batch));
+      if (this.inFlight.size >= MAX_IN_FLIGHT_BATCHES) await Promise.race(this.inFlight);
     }
   }
 
