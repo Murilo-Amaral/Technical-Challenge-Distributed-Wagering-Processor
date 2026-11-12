@@ -130,6 +130,7 @@ Por padrão o `.env.example` usa `AUTH_MODE=disabled`, então dá para chamar a 
 | `bun run test:concurrency` | Concorrência e falhas: paralelismo real, processos reais, `docker pause`. |
 | `bun run test:all` | Unidade, integração e concorrência, nessa ordem. |
 | `bun run test:load` | Teste de carga com 3 instâncias (veja `docs/LOAD_TEST.md`). |
+| `bun run test:acceptance` | Aceitação caixa-preta contra a stack do Compose já no ar (veja abaixo). |
 
 ## Testes
 
@@ -150,6 +151,36 @@ desenvolvimento. **Nenhuma suíte substitui PostgreSQL ou SQS por mocks.**
 
 Todas as suítes terminam verificando o invariante `wallet.balance == saldo reconstruído pelo ledger` e que todo
 journal está balanceado.
+
+### Aceitação caixa-preta (`bun run test:acceptance`)
+
+Verifica os requisitos do desafio apenas pelas interfaces externas de uma stack em execução: API HTTP, filas SQS e,
+somente leitura, o banco para os invariantes finais. São 57 checagens agrupadas por seção do enunciado:
+
+- health e autenticação;
+- wallets e o cenário obrigatório 100/80/80;
+- idempotência e a mesma aposta 50 vezes em paralelo;
+- regras de BET, WIN, LOSS, REFUND e ROLLBACK com seus `failureCode`;
+- identidade do provedor;
+- SQS: referência fora de ordem, reentregas e DLQ;
+- ledger e reconciliação;
+- outbox e os 4 tipos de evento;
+- métricas;
+- invariantes de saldo × ledger.
+
+Cada execução usa ids novos, então pode ser repetida contra a mesma stack. O comando sai com código 1 se alguma
+checagem falhar e 2 se a stack não estiver no ar.
+
+```bash
+docker compose up -d --build --wait
+```
+
+```bash
+KEYCLOAK_ADMIN_PASSWORD="$KEYCLOAK_ADMIN_PASSWORD" bun run test:acceptance
+```
+
+Sem `KEYCLOAK_ADMIN_PASSWORD`, o script assume uma stack com `COMPOSE_AUTH_MODE=disabled` e pula as checagens de
+autenticação. Endereços configuráveis por `API_URL`, `KEYCLOAK_URL`, `SQS_ENDPOINT` e `DATABASE_URL`.
 
 O teste contra o Keycloak real roda quando `KEYCLOAK_ADMIN_PASSWORD` está definido e o Keycloak está no ar; caso
 contrário, ele é pulado. As mesmas regras também são testadas com um emissor OIDC local, com chaves RSA e JWKS reais.
