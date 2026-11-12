@@ -77,7 +77,9 @@ curl -s -X POST localhost:3000/wagering/transactions \
   -d '{"providerId":"provider-a","externalTransactionId":"transaction-123","playerId":"0192f28f-5dc0-7d58-bdb2-814ad6a0f4a1","walletId":"<id da wallet>","roundId":"round-987","gameId":"fortune-chimp","kind":"BET","money":{"amount":"25.00","currency":"BRL"}}'
 ```
 
-Para subir sem autenticação (desenvolvimento), use `AUTH_MODE=disabled docker compose up -d --wait`.
+Para subir sem autenticação (desenvolvimento), use `COMPOSE_AUTH_MODE=disabled docker compose up -d --wait`. O
+Compose usa uma variável própria de propósito: ele carrega o `.env` automaticamente, e o `AUTH_MODE=disabled` do
+`.env` local não deve desligar a autenticação da stack sem aviso.
 
 Para derrubar tudo, incluindo os volumes:
 

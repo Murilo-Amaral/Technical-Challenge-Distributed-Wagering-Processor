@@ -63,7 +63,8 @@ services:
       AWS_REGION: us-east-1
       AWS_ACCESS_KEY_ID: test
       AWS_SECRET_ACCESS_KEY: test
-      AUTH_MODE: ${AUTH_MODE:-keycloak}
+      # Own variable on purpose: compose auto-loads .env, whose AUTH_MODE=disabled (local runs) must not leak in here.
+      AUTH_MODE: ${COMPOSE_AUTH_MODE:-keycloak}
       OIDC_ISSUER_URL: http://localhost:8080/realms/wagering
       OIDC_JWKS_URL: http://keycloak:8080/realms/wagering/protocol/openid-connect/certs
       OIDC_AUDIENCE: wagering-api

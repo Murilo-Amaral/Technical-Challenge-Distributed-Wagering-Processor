@@ -36,7 +36,12 @@ esta máquina, não uma estimativa de capacidade em produção.
 | Rodada | VUs | Duração | Requisições | Throughput | p50 | p95 | p99 | máx | 5xx / erros de rede | Conflitos de lock | Outbox lag p95 / máx | Pico pendente | Drenagem pós-carga |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | A | 16 | 20 s | 5.503 | **274,6 req/s** | 51 ms | 117 ms | 177 ms | 392 ms | 0 / 0 | 0 | 0,48 s / 0,48 s | 242 | 0,2 s |
+| C* | 32 | 30 s | 11.533 | **382,8 req/s** | 56 ms | 193 ms | 722 ms | 2.340 ms | 0 / 0 | 0 | 9,9 s / 10,4 s | 7.372 | 4,7 s |
 | B | 48 | 30 s | 9.863 | **325,0 req/s** | 90 ms | 313 ms | 1.607 ms | 5.006 ms | 0 / 0 | 0 | 9,2 s / 9,2 s | 5.828 | 3,6 s |
+
+\* Rodada C executada depois das correções de ordem por wallet na outbox (no máximo um evento por wallet em cada
+chamada ao SQS; claim que respeita o evento mais antigo da wallet). A ordem custa vazão no relay: o lag cresce mais
+cedo do que nas rodadas A e B, e continua drenando sem perda depois da carga.
 
 Status HTTP: a rodada A teve 4.951 × 201 e 552 × 200 (replays); a rodada B teve 8.905 × 201 e 958 × 200. Não aparece
 nenhum 422 porque todas as wallets têm saldo alto.
