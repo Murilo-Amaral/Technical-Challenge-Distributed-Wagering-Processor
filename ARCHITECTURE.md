@@ -3,6 +3,9 @@
 Este documento explica **como** a solução garante as invariantes do desafio, **por que** cada decisão foi tomada,
 quais **interpretações** foram adotadas onde o enunciado deixa espaço e quais são as **limitações** conhecidas.
 
+A história de como cada parte foi construída, etapa por etapa, e o registro de decisões no formato ADR estão em
+[`docs/README.md`](./docs/README.md).
+
 ## Sumário
 
 1. [Visão geral](#visão-geral)

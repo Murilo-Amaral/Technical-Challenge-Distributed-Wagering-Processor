@@ -7,6 +7,8 @@ processadas em paralelo por várias instâncias.
 - **Stack:** Bun 1.x · TypeScript estrito · NestJS 11 · PostgreSQL 16 · TypeORM 0.3 · SQS (LocalStack) · Keycloak
   (OIDC) · Docker Compose.
 - **Decisões, trade-offs e limitações:** [`ARCHITECTURE.md`](./ARCHITECTURE.md).
+- **Documentação técnica por etapa** (o que foi feito em cada etapa e por quê) e registro de decisões:
+  [`docs/README.md`](./docs/README.md).
 - **Teste de carga:** [`docs/LOAD_TEST.md`](./docs/LOAD_TEST.md).
 
 ---
