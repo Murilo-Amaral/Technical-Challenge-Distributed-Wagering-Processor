@@ -29,12 +29,17 @@ export interface WagerTransactionRepository {
   update(tx: WagerTransaction): Promise<void>;
   findById(id: string): Promise<WagerTransaction | undefined>;
   lockById(id: string): Promise<WagerTransaction | undefined>;
-  findByIdempotencyKey(key: string): Promise<WagerTransaction | undefined>;
+  /** Idempotency keys are scoped to the provider. */
+  findByIdempotencyKey(providerId: string, key: string): Promise<WagerTransaction | undefined>;
   findByProviderExternalId(
     providerId: string,
     externalTransactionId: string,
   ): Promise<WagerTransaction | undefined>;
-  hasProcessedReversal(referenceTransactionId: string): Promise<boolean>;
+  /** The transaction plus whether a PROCESSED REFUND/ROLLBACK already reverses it, in one query. */
+  findReference(
+    providerId: string,
+    externalTransactionId: string,
+  ): Promise<{ transaction: WagerTransaction; reversed: boolean } | undefined>;
   /** PENDING_REFERENCE transactions of one wallet that wait for (providerId, externalTransactionId). */
   findPendingDependents(
     walletId: string,

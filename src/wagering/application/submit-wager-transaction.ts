@@ -81,7 +81,7 @@ export class SubmitWagerTransaction {
         log.info("duplicate queue message ignored (inbox)", { payloadMismatch });
         return {
           type: "duplicate-message",
-          transaction: await ctx.transactions.findByIdempotencyKey(cmd.idempotencyKey),
+          transaction: await ctx.transactions.findByIdempotencyKey(cmd.providerId, cmd.idempotencyKey),
           payloadMismatch,
         };
       }
@@ -91,11 +91,11 @@ export class SubmitWagerTransaction {
 
     // The per-wallet serialization point. Everything below sees a stable wallet.
     const wallet = await ctx.wallets.lockById(cmd.walletId);
+    // Looked up even when the wallet is unknown: reusing a key with a different walletId is a conflict, not a 404.
+    const existing = await this.findExisting(ctx, cmd, options.source);
     if (!wallet) {
       throw new NotFoundError("WALLET_NOT_FOUND", `Wallet ${cmd.walletId} not found`);
     }
-
-    const existing = await this.findExisting(ctx, cmd);
     if (existing) {
       this.metrics.duplicateDetected({ source: options.source, type: "idempotent_replay" });
       log.info("idempotent replay", { transactionId: existing.id });
@@ -125,11 +125,12 @@ export class SubmitWagerTransaction {
   private async findExisting(
     ctx: TransactionContext,
     cmd: WagerCommand,
+    source: SubmitOptions["source"],
   ): Promise<WagerTransaction | undefined> {
-    const byKey = await ctx.transactions.findByIdempotencyKey(cmd.idempotencyKey);
+    const byKey = await ctx.transactions.findByIdempotencyKey(cmd.providerId, cmd.idempotencyKey);
     if (byKey) {
       if (!byKey.matchesPayload(cmd.payloadHash)) {
-        this.metrics.duplicateDetected({ source: "any", type: "conflict" });
+        this.metrics.duplicateDetected({ source, type: "conflict" });
         throw new IdempotencyConflictError(
           "IDEMPOTENCY_KEY_CONFLICT",
           "Idempotency-Key was already used with a different payload",
@@ -144,7 +145,7 @@ export class SubmitWagerTransaction {
     );
     if (byExternalId) {
       if (!byExternalId.matchesPayload(cmd.payloadHash)) {
-        this.metrics.duplicateDetected({ source: "any", type: "conflict" });
+        this.metrics.duplicateDetected({ source, type: "conflict" });
         throw new IdempotencyConflictError(
           "EXTERNAL_TRANSACTION_ID_CONFLICT",
           "externalTransactionId was already used by this provider with a different payload",

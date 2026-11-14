@@ -76,7 +76,7 @@ SQL (READ COMMITTED, `lock_timeout` configurável):
    mensagem é duplicada e recebe ack sem efeito. Entregas simultâneas da mesma mensagem se serializam na PK.
 2. **Lock da wallet:** `SELECT … FOR UPDATE` na linha da wallet. É o ponto de serialização por wallet, válido entre
    todas as instâncias.
-3. **Idempotência:** busca por `idempotency_key`. Mesmo hash → **replay** (devolve o resultado gravado); hash
+3. **Idempotência:** busca por `(provider_id, idempotency_key)`. Mesmo hash → **replay** (devolve o resultado gravado); hash
    diferente → **409**. Em seguida, busca por `(provider_id, external_transaction_id)`, com a mesma regra.
 4. **Settlement** (serviço de domínio puro): valida player/wallet/moeda e a referência; aplica débito ou crédito na
    `Wallet`, que devolve o `WalletLedgerEntry`; monta o journal de partidas dobradas; transiciona a
@@ -163,7 +163,8 @@ Serviço de domínio puro, com as regras da seção 7 do enunciado. A ordem das 
    - não processada → `REFERENCE_NOT_PROCESSED`;
    - tipo não permitido → `REFERENCE_KIND_NOT_ALLOWED`;
    - contexto diferente (provider, player, wallet, moeda ou rodada) → `REFERENCE_CONTEXT_MISMATCH`;
-   - nas reversões, valor diferente → `AMOUNT_MISMATCH`, e referência já revertida → `REFERENCE_ALREADY_REVERSED`;
+   - nas reversões, valor diferente → `AMOUNT_MISMATCH`;
+   - referência já revertida → `REFERENCE_ALREADY_REVERSED` (qualquer operação);
 4. aplicação no saldo: débito sem saldo → `INSUFFICIENT_FUNDS` para BET e `REVERSAL_INSUFFICIENT_FUNDS` para
    ROLLBACK.
 
@@ -201,6 +202,8 @@ string com escala 2. Em nenhum momento o valor passa por `number`. Agregações 
 
 - Um use case corresponde a uma transação (`TypeOrmUnitOfWork`, READ COMMITTED).
 - Cada transação define `lock_timeout` e `statement_timeout` via `set_config(..., true)`, escopados à transação.
+  O pool também tem um `query_timeout` do lado do cliente (`statement_timeout` + 5 s), para o caso em que o servidor
+  está congelado ou inacessível com a conexão TCP aberta.
 - Erros transitórios fazem rollback e retry limitado (`TX_MAX_RETRIES`), com backoff exponencial e *full jitter*.
   Contam como transitórios: deadlock, `lock_timeout`, falha de serialização, perda de conexão, conflito de versão e
   as corridas de unicidade descritas em [Idempotência](#idempotência).
@@ -226,7 +229,7 @@ containers.
 | Partidas dobradas balanceadas | constraint trigger **deferred** `trg_ledger_journal_balanced`: 2 lançamentos, 1 de wallet, Σ débitos = Σ créditos, mesma moeda |
 | Moeda do lançamento = moeda da wallet | FK composta `fk_ledger_wallet_currency (wallet_id, currency) → wallets(id, currency)` |
 | Ledger imutável | triggers `ledger_append_only` (UPDATE/DELETE) e `forbid_truncate` (TRUNCATE) |
-| Idempotência persistente | `uq_wager_idempotency_key`, `uq_wager_provider_external_id` |
+| Idempotência persistente (escopada por provedor) | `uq_wager_provider_idempotency_key (provider_id, idempotency_key)`, `uq_wager_provider_external_id` |
 | Reversão no máximo uma vez | índice único parcial `uq_wager_reversed_once (reference_transaction_id) WHERE kind IN ('REFUND','ROLLBACK') AND status = 'PROCESSED'` |
 | State machine e imutabilidade da transação | trigger `wager_transactions_guard` |
 | Coerência de estado | `ck_wager_processed_at`, `ck_wager_failure_code`, `ck_wager_pending_schedule`, `ck_wager_reference_required`, `ck_wager_bet_without_reference`, `ck_wager_amount` |
@@ -290,6 +293,8 @@ Coberto em processo (`hot-wallet.test.ts`) e entre 3 processos diferentes (`mult
   `(providerId, externalTransactionId)` sob outra chave com payload diferente → 409
   `EXTERNAL_TRANSACTION_ID_CONFLICT`; com payload igual, é replay.
 - **Persistência, não memória:** as duas chaves são `UNIQUE` no banco. Não existe cache de idempotência.
+- **Escopo por provedor:** a chave é única por `(providerId, idempotencyKey)`. Um provedor não consegue ocupar nem
+  sondar as chaves de outro.
 - **Corridas:** pedidos simultâneos da mesma chave na mesma wallet se serializam no lock da wallet, e o segundo vê o
   primeiro. Na mesma chave com `walletId` diferente, ambos travam wallets distintas e um recebe `23505`; o unit of
   work refaz, e na segunda tentativa a linha já está commitada, então a resposta vira replay ou conflito.
@@ -333,7 +338,7 @@ Todos são estáveis e legíveis por máquina (`domain/failure-code.ts` e `appli
 | `REFERENCE_KIND_NOT_ALLOWED` | Ex.: REFUND de WIN, ROLLBACK de LOSS | Corrigir o payload |
 | `REFERENCE_CONTEXT_MISMATCH` | Referência de outro player, wallet, moeda ou rodada | Corrigir o payload |
 | `REFERENCE_NOT_PROCESSED` | A referência foi REJECTED/FAILED | Desistir: nada a reverter |
-| `REFERENCE_ALREADY_REVERSED` | A referência já foi revertida | Desistir: já aplicado |
+| `REFERENCE_ALREADY_REVERSED` | A referência já foi revertida (vale para reversões e para WIN/LOSS sobre BET estornada) | Desistir: já aplicado |
 | `AMOUNT_MISMATCH` | Valor da reversão ≠ valor da referência | Corrigir o payload (reversão parcial fora de escopo) |
 
 **Falha terminal** (`status = FAILED`): `PROCESSING_FAILED`, erro permanente ao reprocessar. Exige investigação
@@ -366,7 +371,9 @@ consistente entre todos os endpoints:
 `infrastructure/messaging/sqs-wager-consumer.ts`.
 
 - Long polling de até 10 mensagens. Mensagens do mesmo `MessageGroupId` (wallet) são processadas **em sequência**;
-  grupos diferentes, **em paralelo**.
+  grupos diferentes, **em paralelo**. O polling continua enquanto um lote é processado (até
+  `CONSUMER_MAX_IN_FLIGHT_BATCHES` lotes; por padrão `DB_POOL_SIZE / 10`, para não exceder o pool de conexões),
+  para um grupo lento não travar os demais; o SQS FIFO não entrega um grupo que ainda tem mensagens em andamento.
 - Usa o **mesmo use case** do HTTP, com a inbox `(consumerName, messageId)` na mesma transação. O `data` passa pela
   mesma validação do corpo HTTP.
 - **Ack (`DeleteMessage`) somente depois do commit.** Se o processo morrer entre o commit e o ack, a mensagem reaparece
@@ -409,9 +416,14 @@ consistente entre todos os endpoints:
   - fora da janela, o consumidor deduplica por `eventId`.
 
   Testado com lease expirando e com 3 relays concorrentes.
-- **Ordem:** `MessageGroupId = walletId`, e o lote é enviado em ordem de `occurred_at`. Entre lotes de relays
-  diferentes a ordem global não é garantida; os eventos carregam `walletVersion` (`WalletBalanceChanged`) e
-  `occurredAt` para o consumidor ordenar ou descartar. Veja [Limitações](#trade-offs-e-limitações).
+- **Ordem por wallet:** `MessageGroupId = walletId`, e a ordem é garantida em três pontos:
+  - no claim: um evento só é reivindicado se nenhum evento mais antigo e não publicado da mesma wallet estiver em
+    backoff ou com lease de outro publisher;
+  - em cada chamada `SendMessageBatch` vai no máximo um evento por wallet;
+  - se um evento falha, os seguintes da mesma wallet são retidos para a próxima rodada.
+
+  Resta uma janela estreita, entre dois publishers que fazem o claim no mesmo instante, coberta por `walletVersion`
+  e `occurredAt` nos eventos. Veja [Limitações](#trade-offs-e-limitações).
 - **Envelope:** `IntegrationEvent<T>` é abstrata; cada evento é uma subclasse com `eventType` e `version` fixados no
   tipo. `data` carrega `MoneyProps` (strings), nunca `Money`.
 - **Métrica de lag:** `wagering_outbox_lag_seconds`, a idade do evento não publicado mais antigo, e
@@ -431,7 +443,8 @@ Não vale pontos no desafio, mas foi pedida integração com IdP externo. **Keyc
 - A API valida o JWT **localmente** contra o JWKS do realm (`jose`, com cache e rotação de chaves), conferindo
   assinatura RS256, `iss`, `aud` e `exp`. Não há chamada ao IdP por requisição.
 - **`ProviderIdentityPolicy`** (`auth/provider-identity.ts`): um provedor só submete ou lê transações cujo
-  `providerId` é o do seu token. Operadores podem tudo.
+  `providerId` é o do seu token. Operadores podem tudo. Em `GET /wagering/transactions/:id`, a transação de outro
+  provedor responde 404, igual a um id inexistente, para não revelar existência.
 - Health e métricas são abertos. Mensagens da fila são canal interno confiável, mas o `providerId` delas passa pelas
   mesmas validações de domínio, e a resolução de referência é sempre escopada por provider.
 - **Sem segredos no repositório:** os client secrets são gerados pelo Keycloak na importação, e a senha de admin vem
@@ -485,7 +498,8 @@ Não vale pontos no desafio, mas foi pedida integração com IdP externo. **Keyc
    ROLLBACK da mesma BET creditaria o jogador duas vezes. Desfazer um REFUND continua possível, via ROLLBACK *do
    REFUND*, que é outra referência. Garantido por `uq_wager_reversed_once`.
 2. **WIN e LOSS podem referenciar** uma BET, que deve ser da mesma rodada. Se a referência for informada e não
-   existir, eles também ficam `PENDING_REFERENCE`.
+   existir, eles também ficam `PENDING_REFERENCE`. Uma BET já revertida (REFUND/ROLLBACK) não pode mais ser
+   liquidada por WIN/LOSS: `REFERENCE_ALREADY_REVERSED`.
 3. **LOSS aceita valor `0.00`.** As demais operações exigem valor > 0.
 4. **Wallet inexistente** na submissão: 404 `WALLET_NOT_FOUND`, sem persistir nada, porque a FK impede uma transação
    órfã. Via SQS vai para a DLQ, para não perder a mensagem. Se a wallet for criada depois, a mesma chave será
@@ -537,9 +551,10 @@ Não vale pontos no desafio, mas foi pedida integração com IdP externo. **Keyc
   latência de uma transação curta. Essa é a escolha correta para dinheiro, mas uma única wallet extremamente quente
   não escala horizontalmente. Mitigações possíveis: transações ainda mais curtas, ou *batching* por wallet no
   consumidor.
-- **Ordem dos eventos publicados** não é estritamente garantida entre lotes de relays diferentes. Para ordem estrita
-  por wallet seria preciso um relay que só reivindica o evento mais antigo pendente de cada `partition_key`, ao custo
-  de throughput. A escolha foi at-least-once com `walletVersion` e `occurredAt` nos eventos.
+- **Ordem dos eventos publicados:** o claim respeita a ordem por wallet, mas dois publishers fazendo o claim no mesmo
+  instante ainda podem, numa janela estreita, pegar eventos consecutivos da mesma wallet (o `SKIP LOCKED` não enxerga
+  um claim ainda não commitado). Fechar essa janela exigiria um lock por `partition_key` (por exemplo, advisory
+  lock). A entrega é at-least-once, com `walletVersion` e `occurredAt` nos eventos.
 - **Throughput do relay** é o primeiro gargalo sob carga alta (veja `docs/LOAD_TEST.md`): o lag cresce, mas drena sem
   perda. Há knobs de configuração, e publicar lotes de wallets diferentes em paralelo fica como evolução.
 - **Visibility timeout fixo:** não há heartbeat que estenda a visibilidade de mensagens lentas. O processamento é

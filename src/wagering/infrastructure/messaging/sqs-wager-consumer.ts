@@ -26,6 +26,8 @@ export interface ConsumerSettings {
   retryBaseSeconds: number;
   retryMaxSeconds: number;
   shutdownGraceMs: number;
+  /** Batches (≤ 10 messages each) processed concurrently; keep batches × 10 within the DB pool. */
+  maxInFlightBatches: number;
   /** Test-only fault injection, e.g. "crash-after-commit-before-ack". */
   faultInjection?: string | undefined;
 }
@@ -114,9 +116,11 @@ export class SqsWagerConsumer {
         continue;
       }
       if (messages.length === 0) continue;
-      const batch = this.processBatch(messages);
+      // Not awaited: other groups keep flowing while a slow group drains. SQS FIFO never hands out a group that still
+      // has in-flight messages, so per-wallet ordering is preserved. In-flight batches are bounded.
+      const batch = this.processBatch(messages).finally(() => this.inFlight.delete(batch));
       this.inFlight.add(batch);
-      await batch.finally(() => this.inFlight.delete(batch));
+      if (this.inFlight.size >= this.settings.maxInFlightBatches) await Promise.race(this.inFlight);
     }
   }
 

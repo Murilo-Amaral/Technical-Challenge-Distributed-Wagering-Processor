@@ -138,6 +138,45 @@ describe("submit wager transaction", () => {
     expect<unknown>(error.code).toBe("EXTERNAL_TRANSACTION_ID_CONFLICT");
   });
 
+  test("reusing a key with an unknown walletId is a conflict, not WALLET_NOT_FOUND", async () => {
+    const w = await openWallet(h);
+    const first = wagerBody({ walletId: w.id, playerId: w.playerId });
+    await h.submit.execute(parseWagerCommand(first.body, first.idempotencyKey), {
+      source: "http",
+      correlationId: "c",
+    });
+    const typo = { ...first.body, walletId: Bun.randomUUIDv7() };
+    const error = await h.submit
+      .execute(parseWagerCommand(typo, first.idempotencyKey), { source: "http", correlationId: "c" })
+      .catch((e) => e);
+    expect(error).toBeInstanceOf(IdempotencyConflictError);
+    expect(error.code).toBe("IDEMPOTENCY_KEY_CONFLICT");
+  });
+
+  test("idempotency keys are scoped to the provider", async () => {
+    const w = await openWallet(h);
+    const key = "shared-key-123";
+    const a = wagerBody({
+      walletId: w.id,
+      playerId: w.playerId,
+      providerId: "provider-a",
+      idempotencyKey: key,
+    });
+    const b = wagerBody({
+      walletId: w.id,
+      playerId: w.playerId,
+      providerId: "provider-b",
+      idempotencyKey: key,
+    });
+    const ra = await h.submit.execute(parseWagerCommand(a.body, key), { source: "http", correlationId: "c" });
+    const rb = await h.submit.execute(parseWagerCommand(b.body, key), { source: "http", correlationId: "c" });
+    expect(ra.type === "result" && rb.type === "result" && ra.transaction.id !== rb.transaction.id).toBe(
+      true,
+    );
+    expect(rb.type === "result" && rb.idempotentReplay).toBe(false);
+    expect((await h.queries.wallet(w.id)).balance.amount).toBe("80.00");
+  });
+
   test("insufficient funds is persisted as REJECTED with no ledger entry and a Rejected event", async () => {
     const w = await openWallet(h, "5.00");
     const result = await submit(h, { walletId: w.id, playerId: w.playerId, amount: "5.01" });
@@ -325,10 +364,10 @@ describe("out-of-order references", () => {
     });
     const id = refund.type === "result" ? refund.transaction.id : "";
 
-    await h.pending.runOnce(); // not due yet (1s backoff)
+    expect(await h.pending.runOnce()).toBe(0); // not due yet (1s backoff): nothing handled, the runner may sleep
     expect((await h.queries.transaction(id)).referenceAttempts).toBe(1);
     h.clock.advance(1_100);
-    await h.pending.runOnce(); // attempt 2 -> rescheduled +2s
+    expect(await h.pending.runOnce()).toBeGreaterThanOrEqual(1); // attempt 2 -> rescheduled +2s
     const second = await h.queries.transaction(id);
     expect<unknown>(second.status).toBe("PENDING_REFERENCE");
     expect(second.referenceAttempts).toBe(2);

@@ -18,8 +18,28 @@ export class SqsEventPublisher implements EventPublisher {
 
   async publish(messages: OutboxMessage[]): Promise<PublishResult> {
     const result: PublishResult = { succeeded: [], failed: [] };
-    for (let i = 0; i < messages.length; i += SQS_BATCH_LIMIT) {
-      const chunk = messages.slice(i, i + SQS_BATCH_LIMIT);
+    // Once an event of a partition fails, its later events are held back so they are not published ahead of it.
+    const blocked = new Set<string>();
+    let pending = [...messages];
+    while (pending.length > 0) {
+      // At most one event per partition per batch call: SQS may accept a later entry of a group and reject an earlier
+      // one in the same call, which would publish them out of order.
+      const chunk: OutboxMessage[] = [];
+      const seen = new Set<string>();
+      const rest: OutboxMessage[] = [];
+      for (const m of pending) {
+        if (blocked.has(m.partitionKey)) {
+          result.failed.push({ id: m.id, error: "held back: an earlier event of this partition failed" });
+        } else if (chunk.length < SQS_BATCH_LIMIT && !seen.has(m.partitionKey)) {
+          chunk.push(m);
+          seen.add(m.partitionKey);
+        } else {
+          rest.push(m);
+          seen.add(m.partitionKey);
+        }
+      }
+      pending = rest;
+      if (chunk.length === 0) continue;
       try {
         const response = await this.sqs.send(
           new SendMessageBatchCommand({
@@ -35,11 +55,15 @@ export class SqsEventPublisher implements EventPublisher {
         );
         for (const ok of response.Successful ?? []) result.succeeded.push(chunk[Number(ok.Id)]!.id);
         for (const ko of response.Failed ?? []) {
-          result.failed.push({ id: chunk[Number(ko.Id)]!.id, error: `${ko.Code}: ${ko.Message ?? ""}` });
+          const m = chunk[Number(ko.Id)]!;
+          blocked.add(m.partitionKey);
+          result.failed.push({ id: m.id, error: `${ko.Code}: ${ko.Message ?? ""}` });
         }
       } catch (error) {
-        for (const m of chunk)
+        for (const m of chunk) {
+          blocked.add(m.partitionKey);
           result.failed.push({ id: m.id, error: error instanceof Error ? error.message : String(error) });
+        }
       }
     }
     return result;

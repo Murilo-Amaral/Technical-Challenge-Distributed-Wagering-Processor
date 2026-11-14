@@ -20,7 +20,7 @@ export interface UnitOfWorkSettings {
  * replay / conflict / REFERENCE_ALREADY_REVERSED instead.
  */
 const RETRYABLE_UNIQUE_CONSTRAINTS = new Set([
-  "uq_wager_idempotency_key",
+  "uq_wager_provider_idempotency_key",
   "uq_wager_provider_external_id",
   "uq_wager_reversed_once",
 ]);

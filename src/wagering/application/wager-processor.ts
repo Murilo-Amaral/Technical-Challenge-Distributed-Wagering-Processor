@@ -74,17 +74,11 @@ export class WagerProcessor {
     // Resolved by (providerId, referenceExternalTransactionId). The reference may live in another wallet: then the
     // context check rejects it. Reading it without locking is safe because only terminal (immutable) references are
     // ever used to settle; non-terminal ones keep the dependent waiting.
-    const reference = await ctx.transactions.findByProviderExternalId(
-      tx.providerId,
-      tx.referenceExternalTransactionId!,
-    );
+    const reference = await ctx.transactions.findReference(tx.providerId, tx.referenceExternalTransactionId!);
     if (!reference) {
       return { found: false };
     }
-    const alreadyReversed = tx.isReversal()
-      ? await ctx.transactions.hasProcessedReversal(reference.id)
-      : false;
-    return { found: true, transaction: reference, alreadyReversed };
+    return { found: true, transaction: reference.transaction, alreadyReversed: reference.reversed };
   }
 
   private async persistEffects(
@@ -136,21 +130,19 @@ export class WagerProcessor {
     });
   }
 
-  /** Breadth-first: a settled BET can unblock a REFUND, which can in turn unblock a ROLLBACK of that REFUND. */
-  private async settleDependents(root: WagerTransaction, pc: ProcessingContext): Promise<void> {
-    const queue = [root];
-    while (queue.length > 0) {
-      const settled = queue.shift()!;
-      if (!settled.isTerminal()) continue;
-      const dependents = await pc.ctx.transactions.findPendingDependents(
-        pc.wallet.id,
-        settled.providerId,
-        settled.externalTransactionId,
-      );
-      for (const dependent of dependents) {
-        await this.processPending(dependent, { ...pc, causationId: settled.id, source: "reference-arrival" });
-        queue.push(dependent);
-      }
+  /**
+   * Settles the PENDING_REFERENCE transactions waiting for `settled`. Chains (a BET unblocking a REFUND that unblocks
+   * a ROLLBACK of that REFUND) are followed because processPending calls back into this method.
+   */
+  private async settleDependents(settled: WagerTransaction, pc: ProcessingContext): Promise<void> {
+    if (!settled.isTerminal()) return;
+    const dependents = await pc.ctx.transactions.findPendingDependents(
+      pc.wallet.id,
+      settled.providerId,
+      settled.externalTransactionId,
+    );
+    for (const dependent of dependents) {
+      await this.processPending(dependent, { ...pc, causationId: settled.id, source: "reference-arrival" });
     }
   }
 }

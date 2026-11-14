@@ -42,7 +42,8 @@
     "start:dev": "bun --watch run src/main.ts",
     "test:all": "bun run test:unit && bun run test:integration && bun run test:concurrency",
     "check": "bun run lint && bun run typecheck && bun run test:unit",
-    "test:load": "bun run scripts/load-test.ts"
+    "test:load": "bun run scripts/load-test.ts",
+    "test:acceptance": "bun run scripts/acceptance-test.ts"
   },
   "engines": {
     "bun": ">=1.1"

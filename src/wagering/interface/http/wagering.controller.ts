@@ -1,5 +1,6 @@
 import { Body, Controller, Get, Headers, Inject, Param, Post, Req, Res } from "@nestjs/common";
 import type { Response } from "express";
+import { NotFoundError, ProviderForbiddenError } from "../../application/errors";
 import { WageringQueries } from "../../application/queries";
 import { SubmitWagerTransaction } from "../../application/submit-wager-transaction";
 import { parseWagerCommand } from "../../application/wager-request";
@@ -40,7 +41,15 @@ export class WageringController {
   @Get("wagering/transactions/:transactionId")
   async get(@Param("transactionId") transactionId: string, @Req() req: AuthenticatedRequest) {
     const tx = await this.queries.transaction(uuidParam(transactionId, "transactionId"));
-    assertActsAsProvider(req.principal!, tx.providerId);
+    try {
+      assertActsAsProvider(req.principal!, tx.providerId);
+    } catch (error) {
+      // Same answer as a missing id, so providers cannot probe for other providers' transactions.
+      if (error instanceof ProviderForbiddenError) {
+        throw new NotFoundError("TRANSACTION_NOT_FOUND", `Transaction ${transactionId} not found`);
+      }
+      throw error;
+    }
     return presentTransaction(tx);
   }
 

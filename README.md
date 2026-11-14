@@ -77,7 +77,9 @@ curl -s -X POST localhost:3000/wagering/transactions \
   -d '{"providerId":"provider-a","externalTransactionId":"transaction-123","playerId":"0192f28f-5dc0-7d58-bdb2-814ad6a0f4a1","walletId":"<id da wallet>","roundId":"round-987","gameId":"fortune-chimp","kind":"BET","money":{"amount":"25.00","currency":"BRL"}}'
 ```
 
-Para subir sem autenticação (desenvolvimento), use `AUTH_MODE=disabled docker compose up -d --wait`.
+Para subir sem autenticação (desenvolvimento), use `COMPOSE_AUTH_MODE=disabled docker compose up -d --wait`. O
+Compose usa uma variável própria de propósito: ele carrega o `.env` automaticamente, e o `AUTH_MODE=disabled` do
+`.env` local não deve desligar a autenticação da stack sem aviso.
 
 Para derrubar tudo, incluindo os volumes:
 
@@ -128,6 +130,7 @@ Por padrão o `.env.example` usa `AUTH_MODE=disabled`, então dá para chamar a 
 | `bun run test:concurrency` | Concorrência e falhas: paralelismo real, processos reais, `docker pause`. |
 | `bun run test:all` | Unidade, integração e concorrência, nessa ordem. |
 | `bun run test:load` | Teste de carga com 3 instâncias (veja `docs/LOAD_TEST.md`). |
+| `bun run test:acceptance` | Aceitação caixa-preta contra a stack do Compose já no ar (veja abaixo). |
 
 ## Testes
 
@@ -148,6 +151,36 @@ desenvolvimento. **Nenhuma suíte substitui PostgreSQL ou SQS por mocks.**
 
 Todas as suítes terminam verificando o invariante `wallet.balance == saldo reconstruído pelo ledger` e que todo
 journal está balanceado.
+
+### Aceitação caixa-preta (`bun run test:acceptance`)
+
+Verifica os requisitos do desafio apenas pelas interfaces externas de uma stack em execução: API HTTP, filas SQS e,
+somente leitura, o banco para os invariantes finais. São 57 checagens agrupadas por seção do enunciado:
+
+- health e autenticação;
+- wallets e o cenário obrigatório 100/80/80;
+- idempotência e a mesma aposta 50 vezes em paralelo;
+- regras de BET, WIN, LOSS, REFUND e ROLLBACK com seus `failureCode`;
+- identidade do provedor;
+- SQS: referência fora de ordem, reentregas e DLQ;
+- ledger e reconciliação;
+- outbox e os 4 tipos de evento;
+- métricas;
+- invariantes de saldo × ledger.
+
+Cada execução usa ids novos, então pode ser repetida contra a mesma stack. O comando sai com código 1 se alguma
+checagem falhar e 2 se a stack não estiver no ar.
+
+```bash
+docker compose up -d --build --wait
+```
+
+```bash
+KEYCLOAK_ADMIN_PASSWORD="$KEYCLOAK_ADMIN_PASSWORD" bun run test:acceptance
+```
+
+Sem `KEYCLOAK_ADMIN_PASSWORD`, o script assume uma stack com `COMPOSE_AUTH_MODE=disabled` e pula as checagens de
+autenticação. Endereços configuráveis por `API_URL`, `KEYCLOAK_URL`, `SQS_ENDPOINT` e `DATABASE_URL`.
 
 O teste contra o Keycloak real roda quando `KEYCLOAK_ADMIN_PASSWORD` está definido e o Keycloak está no ar; caso
 contrário, ele é pulado. As mesmas regras também são testadas com um emissor OIDC local, com chaves RSA e JWKS reais.
@@ -258,6 +291,7 @@ Todas as variáveis são validadas na inicialização (`src/config/app-config.ts
 | `SQS_ENDPOINT` / `SQS_CREATE_QUEUES` | — / `true` | LocalStack; criação idempotente das filas |
 | `WORKERS` | `consumer,outbox,pending-references` | Componentes de background que este processo roda |
 | `CONSUMER_MAX_RECEIVES` / `CONSUMER_RETRY_BASE_S` | `5` / `2` | Tentativas antes da DLQ; backoff base |
+| `CONSUMER_MAX_IN_FLIGHT_BATCHES` | `DB_POOL_SIZE / 10` (mín. 1) | Lotes SQS (≤ 10 mensagens) processados em paralelo |
 | `PENDING_REF_MAX_ATTEMPTS` / `PENDING_REF_BASE_DELAY_MS` / `PENDING_REF_MAX_DELAY_MS` | `10` / `2000` / `120000` | Janela de espera por referências fora de ordem |
 | `OUTBOX_BATCH_SIZE` / `OUTBOX_POLL_MS` / `OUTBOX_LEASE_MS` | `50` / `500` / `30000` | Relay da outbox |
 | `AUTH_MODE` | `disabled` (local) / `keycloak` (Compose) | Autenticação |

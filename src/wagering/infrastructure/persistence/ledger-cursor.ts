@@ -1,5 +1,8 @@
 import { ValidationError } from "../../application/errors";
 
+/** PostgreSQL bigint upper bound: larger values would fail in the query (22003) instead of as a bad cursor. */
+const MAX_BIGINT = 9223372036854775807n;
+
 /**
  * Opaque, stable ledger cursor: base64url of {"v":1,"s":"<sequence>"}. The sequence is a monotonic identity column,
  * so pages never shift when new entries are appended (keyset pagination, newest first).
@@ -14,7 +17,12 @@ export function decodeLedgerCursor(cursor: string): string {
       v?: number;
       s?: unknown;
     };
-    if (parsed.v === 1 && typeof parsed.s === "string" && /^\d{1,19}$/.test(parsed.s)) {
+    if (
+      parsed.v === 1 &&
+      typeof parsed.s === "string" &&
+      /^\d{1,19}$/.test(parsed.s) &&
+      BigInt(parsed.s) <= MAX_BIGINT
+    ) {
       return parsed.s;
     }
   } catch {

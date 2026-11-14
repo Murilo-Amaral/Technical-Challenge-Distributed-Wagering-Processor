@@ -22,7 +22,7 @@ export class ProcessPendingReferences {
     private readonly batchSize: number,
   ) {}
 
-  /** @returns how many transactions were examined. */
+  /** @returns how many transactions were actually settled or rescheduled (0 lets the runner sleep). */
   async runOnce(): Promise<number> {
     const candidates = await this.uow.run(
       (ctx) => ctx.transactions.findDuePendingReferences(this.clock.now(), this.batchSize),
@@ -30,15 +30,16 @@ export class ProcessPendingReferences {
         name: "pending_references_scan",
       },
     );
+    let handled = 0;
     for (const candidate of candidates) {
       try {
-        await this.uow.run(
+        const processed = await this.uow.run(
           async (ctx) => {
             const now = this.clock.now();
             const wallet = await ctx.wallets.lockById(candidate.walletId);
             const tx = await ctx.transactions.lockById(candidate.id);
-            if (!wallet || !tx || tx.status !== WagerTransactionStatus.PendingReference) return;
-            if (tx.nextReferenceAttemptAt && tx.nextReferenceAttemptAt > now) return;
+            if (!wallet || !tx || tx.status !== WagerTransactionStatus.PendingReference) return false;
+            if (tx.nextReferenceAttemptAt && tx.nextReferenceAttemptAt > now) return false;
             this.metrics.retry({ component: "pending_references", reason: "reference_missing" });
             await this.processor.processPending(tx, {
               ctx,
@@ -48,9 +49,11 @@ export class ProcessPendingReferences {
               causationId: tx.id,
               source: "pending-reference-worker",
             });
+            return true;
           },
           { name: "pending_references_process" },
         );
+        if (processed) handled++;
       } catch (error) {
         if (error instanceof TransientInfrastructureError) {
           // Left untouched: it stays due and is picked up on the next tick.
@@ -61,9 +64,10 @@ export class ProcessPendingReferences {
           continue;
         }
         await this.markFailed(candidate.id, candidate.walletId, error);
+        handled++;
       }
     }
-    return candidates.length;
+    return handled;
   }
 
   /** A non-transient error is permanent for this transaction: FAILED keeps it auditable instead of looping forever. */

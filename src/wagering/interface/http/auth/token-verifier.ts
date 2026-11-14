@@ -1,4 +1,5 @@
-import { createRemoteJWKSet, type JWTPayload, jwtVerify } from "jose";
+import { createRemoteJWKSet, errors, type JWTPayload, jwtVerify } from "jose";
+import { TransientInfrastructureError } from "../../../application/errors";
 import type { Principal } from "./principal";
 import { Roles } from "./principal";
 
@@ -44,8 +45,12 @@ export class OidcTokenVerifier implements TokenVerifier {
         audience: this.settings.audience,
         clockTolerance: 5,
       }));
-    } catch {
-      throw new UnauthorizedError("Invalid or expired token");
+    } catch (error) {
+      // Token problems are JOSE errors; a JWKS timeout or a failed fetch means the IdP is unreachable (retryable 503).
+      if (error instanceof errors.JOSEError && !(error instanceof errors.JWKSTimeout)) {
+        throw new UnauthorizedError("Invalid or expired token");
+      }
+      throw new TransientInfrastructureError("Identity provider unreachable", error);
     }
     const realmRoles = (payload.realm_access as { roles?: unknown } | undefined)?.roles;
     const roles = new Set(

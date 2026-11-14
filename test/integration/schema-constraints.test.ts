@@ -224,7 +224,7 @@ describe("ledger", () => {
 });
 
 describe("wager transactions", () => {
-  test("idempotency key and provider external id are unique", async () => {
+  test("idempotency key (per provider) and provider external id are unique", async () => {
     const walletId = await tx((m) => insertWallet(m));
     const id = await tx((m) => insertWager(m, walletId));
     const [row] = await ds.query(
@@ -241,7 +241,7 @@ describe("wager transactions", () => {
             [uuid(), row.idempotency_key, walletId],
           ),
         ),
-      /uq_wager_idempotency_key/,
+      /uq_wager_provider_idempotency_key/,
     );
   });
 

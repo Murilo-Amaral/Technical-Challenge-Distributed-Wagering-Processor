@@ -110,13 +110,12 @@ export class Settlement {
     if (!sameContext) {
       return FailureCode.ReferenceContextMismatch;
     }
-    if (tx.isReversal()) {
-      if (!reference.money.equals(tx.money)) {
-        return FailureCode.AmountMismatch;
-      }
-      if (alreadyReversed) {
-        return FailureCode.ReferenceAlreadyReversed;
-      }
+    if (tx.isReversal() && !reference.money.equals(tx.money)) {
+      return FailureCode.AmountMismatch;
+    }
+    // A reversed (refunded / rolled back) transaction can be neither reversed again nor settled by a WIN/LOSS.
+    if (alreadyReversed) {
+      return FailureCode.ReferenceAlreadyReversed;
     }
     return undefined;
   }

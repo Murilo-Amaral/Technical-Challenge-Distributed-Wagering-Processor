@@ -11,8 +11,25 @@ export interface Instance {
 
 const LOG_DIR = process.env.TEST_INSTANCE_LOG_DIR;
 
-/** Starts a real service process (bun run src/main.ts) and waits until it reports ready. */
-export async function spawnInstance(name: string, env: Record<string, string>): Promise<Instance> {
+/**
+ * Starts a real service process (bun run src/main.ts) and waits until it reports ready. The port is random, so a
+ * startup exit (e.g. port already taken) is retried on another port.
+ */
+export async function spawnInstance(
+  name: string,
+  env: Record<string, string>,
+  attempts = 3,
+): Promise<Instance> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await spawnOnce(name, env);
+    } catch (error) {
+      if (attempt >= attempts || !String(error).includes("exited during startup")) throw error;
+    }
+  }
+}
+
+async function spawnOnce(name: string, env: Record<string, string>): Promise<Instance> {
   const port = 20_000 + Math.floor(Math.random() * 20_000);
   const proc = Bun.spawn(["bun", "run", "src/main.ts"], {
     env: {
